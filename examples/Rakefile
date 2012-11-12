@@ -1,0 +1,73 @@
+##
+# Basic rake task for connecting multiple user accounts
+#   rake stream_multiple_accounts[60]
+##
+require 'tweetstream'
+
+@app_token = ''
+@app_secret = ''
+
+@user_accounts = {:name_one => { :token => '',
+                                :secret => '',
+                                :filter => ['cubs', '#baseball']},
+                 :name_two => { :token  => '',
+                                :secret => '',
+                                :filter => ['bmw', '#cars']}
+                }
+
+desc "Connect Multiple User Accounts"
+task :stream_multiple_accounts, [:timeout] do |t, args|
+  all_pids = []
+  @user_accounts.each do |k, v|
+    new_pid = fork {
+      configure_tweetstream(v[:token], v[:secret])
+
+      @start_time = Time.now
+      @timeout = args.timeout.to_i
+      def bailout?
+        Time.now - @start_time > @timeout ? true : false
+      end
+
+      #Setup Client Stream & Callbacks
+      client = TweetStream::Client.new
+      client.on_delete do |status_id, user_id|
+        puts "\e[5;1;31mPlease delete: #{status_id}, #{user_id}\e[0m"
+        client.stop if bailout?
+      end
+      client.on_reconnect do |timeout, retries|
+        puts "\e[5;1;31mTwitter client #{client} got a reconnect: #{timeout}, #{retries}\e[0m"
+        client.stop if bailout?
+      end
+      client.on_unauthorized do |message|
+        puts "\e[5;1;31mUser is not authorized to connect to twitter: #{message}\e[0m"
+        client.stop if bailout?
+      end
+      client.on_error do |message|
+        puts "\e[5;1;31mTwitter client got on error: #{message}\e[0m"
+        client.stop if bailout?
+      end
+      client.on_limit do |discarded_count|
+        puts "\e[5;1;31mTwitter client got a limit message: #{discarded_count}\e[0m"
+        client.stop if bailout?
+      end
+
+      client.track(*v[:filter]) do |status, tw_client|
+        puts "#{status.text}"
+        tw_client.stop if bailout?
+      end
+    }
+    all_pids.push(new_pid)
+  end
+  puts "Filter pids: #{all_pids}"
+  Process.waitall
+end
+
+def configure_tweetstream(user_token, user_secret)
+  TweetStream.configure do |config|
+    config.consumer_key       = @app_token
+    config.consumer_secret    = @app_secret
+    config.oauth_token        = user_token
+    config.oauth_token_secret = user_secret
+    config.auth_method        = :oauth
+  end
+end
