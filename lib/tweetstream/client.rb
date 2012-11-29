@@ -2,6 +2,8 @@ require 'em-twitter'
 require 'eventmachine'
 require 'multi_json'
 require 'twitter'
+require 'resque'
+require 'json'
 
 module TweetStream
   # Provides simple access to the Twitter Streaming API (https://dev.twitter.com/docs/streaming-api)
@@ -126,6 +128,12 @@ module TweetStream
     # number of HTTP connections to combine track and follow.
     def filter(query_params = {}, &block)
       start('/1.1/statuses/filter.json', query_params.merge(:method => :post), &block)
+    end
+
+    # Uses resque queues to store and scrape tweets
+    # Processing of tweets is done through resque workers
+    def crunch(keywords, resque_object)
+      start_crunch(keywords, resque_object)
     end
 
     # Make a call to the userstream api for currently authenticated user
@@ -372,6 +380,30 @@ module TweetStream
       else
         @callbacks[event.to_s]
       end
+    end
+
+    #puts incoming and missed tweets into two resque queues
+    def start_crunch(keywords, resque_class)
+      query_params = {}
+      query_params.merge!(:track => keywords)
+      query_params.merge!(:method => :post)
+
+      @last_tweet_id = nil
+      @last_limit_id = nil
+      self.on_limit do |discarded_count|
+        puts "\e[5;1;31mTwitter crunch got a limit message: #{discarded_count}\e[0m"
+        #Enqueue a missed scrape job
+        Resque.enqueue(ScrapeMissedTweets, resque_class, discarded_count,keywords, @last_limit_id, @last_tweet_id,\
+                       @consumer_key, @consumer_secret, @oauth_token, @oauth_token_secret)
+        @last_limit_id = @last_tweet_id
+      end
+
+      enqueue_tweets = Proc.new do |status|
+        @last_tweet_id = status.id
+        Resque.enqueue(resque_class, status.attrs)
+      end
+
+      start('/1.1/statuses/filter.json',query_params, &enqueue_tweets)
     end
 
     # connect to twitter while starting a new EventMachine run loop

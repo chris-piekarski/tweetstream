@@ -1,6 +1,7 @@
 require 'tweetstream/configuration'
 require 'tweetstream/client'
 require 'tweetstream/daemon'
+require 'tweetstream/crunch'
 
 module TweetStream
   extend Configuration

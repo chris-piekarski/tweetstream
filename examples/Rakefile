@@ -3,17 +3,36 @@
 #   rake stream_multiple_accounts[60]
 ##
 require 'tweetstream'
+require "resque/tasks"
+require 'resque-dynamic-queues'
 
 @app_token = ''
 @app_secret = ''
 
 @user_accounts = {:name_one => { :token => '',
-                                :secret => '',
-                                :filter => ['cubs', '#baseball']},
-                 :name_two => { :token  => '',
-                                :secret => '',
-                                :filter => ['bmw', '#cars']}
-                }
+                                 :secret => '',
+                                 :filter => ['cubs', '#baseball']},
+                  :name_two => { :token  => '',
+                                 :secret => '',
+                                 :filter => ['bmw', '#cars']}
+                 }
+
+class Tweets
+  @queue = :tweets_to_process
+
+  def self.perform(status)
+    puts status["text"]
+  end
+end
+
+desc "Crunch a few tweets"
+task :crunch_it, [:name] do |t, args|
+  name_symbol = args.name.to_sym
+  configure_tweetstream(@user_accounts[name_symbol][:token], @user_accounts[name_symbol][:secret])
+  client = TweetStream::Client.new
+  add_client_callbacks(client)
+  client.crunch(@user_accounts[name_symbol][:filter], Tweets)
+end
 
 desc "Connect Multiple User Accounts"
 task :stream_multiple_accounts, [:timeout] do |t, args|
@@ -69,5 +88,23 @@ def configure_tweetstream(user_token, user_secret)
     config.oauth_token        = user_token
     config.oauth_token_secret = user_secret
     config.auth_method        = :oauth
+  end
+end
+
+def add_client_callbacks(client)
+  client.on_delete do |status_id, user_id|
+    puts "\e[5;1;31mPlease delete: #{status_id}, #{user_id}\e[0m"
+  end
+  client.on_reconnect do |timeout, retries|
+    puts "\e[5;1;31mTwitter client #{client} got a reconnect: #{timeout}, #{retries}\e[0m"
+  end
+  client.on_unauthorized do |message|
+    puts "\e[5;1;31mUser is not authorized to connect to twitter: #{message}\e[0m"
+  end
+  client.on_error do |message|
+    puts "\e[5;1;31mTwitter client got on error: #{message}\e[0m"
+  end
+  client.on_limit do |discarded_count|
+    puts "\e[5;1;31mTwitter client got a limit message: #{discarded_count}\e[0m"
   end
 end
